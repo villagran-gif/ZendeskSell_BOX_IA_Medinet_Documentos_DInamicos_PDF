@@ -1505,6 +1505,7 @@ app.post('/v1/drive/folder/ensure', requireApiKey, async (req, res) => {
 
 app.post('/v1/render', requireApiKey, async (req, res) => {
   try {
+    // P1: respeta el flag de escritura (igual que /api/docs/generate-batch)
     if (!isWriteEnabledForDocs()) {
       return res.status(403).json({
         ok: false,
@@ -1515,14 +1516,20 @@ app.post('/v1/render', requireApiKey, async (req, res) => {
     }
 
     const payload = req.body || {};
-    const templateFileId = String(payload.template_key || '').trim(); // aquí viene el ID (lo dimos en /v1/config)
+    const templateFileId = String(payload.template_key || '').trim();
     if (!templateFileId) {
       return res.status(400).json({ ok: false, status: 400, error: 'MISSING_TEMPLATE_KEY' });
     }
 
+    // P2: aceptar docs/pdf folder IDs aunque no venga deal.folder_id
     const rootFolderId = String(payload.deal?.folder_id || payload.folder_id || '').trim();
-    const docsFolderId = String(payload.deal?.docs_folder_id || payload.docs_folder_id || rootFolderId).trim();
-    const pdfFolderId = String(payload.deal?.pdf_folder_id || payload.pdf_folder_id || rootFolderId).trim();
+    let docsFolderId = String(payload.deal?.docs_folder_id || payload.docs_folder_id || '').trim();
+    let pdfFolderId  = String(payload.deal?.pdf_folder_id  || payload.pdf_folder_id  || '').trim();
+
+    // fallbacks
+    docsFolderId = docsFolderId || rootFolderId;
+    pdfFolderId  = pdfFolderId  || rootFolderId || docsFolderId;
+
     if (!docsFolderId || !pdfFolderId) {
       return res.status(400).json({
         ok: false,
@@ -1548,6 +1555,7 @@ app.post('/v1/render', requireApiKey, async (req, res) => {
 
     const labelBase = String(payload.template_name || payload.doc_type || payload.template_label || payload.template_key || 'doc').trim();
     const safeDocName = labelBase.slice(0, 60);
+
     const docName = `${safeDocName} - ${fecha}`;
     const pdfName = `${safeDocName}_${fecha}.pdf`;
 
