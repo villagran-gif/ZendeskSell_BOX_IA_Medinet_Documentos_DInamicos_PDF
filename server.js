@@ -1024,6 +1024,16 @@ const DF_CIR_BALON = findDealFieldNameByNorm(dcat, [normKey('CIRUJANO DE BALON')
       });
     }
 
+    const pesoNum = parseNumDot(pesoRaw);
+    const estaturaNum = parseNumDot(estaturaRaw);
+    const imcCalc = calcImc(pesoNum, estaturaNum);
+    const imcStr = (imcCalc === null) ? null : imcCalc.toFixed(2);
+    const imcClasif = (imcCalc === null) ? null : classifyImc(imcCalc);
+    const edadCalc = calcEdadFromDDMMYYYY(cleanValue(body.fecha_nacimiento || body.fechaNacimiento || body['Fecha Nacimiento'] || body['Fecha Nacimiento']));
+    const edadStr = (edadCalc === null) ? null : String(edadCalc);
+    const whatsappLink = waLinkFromPhone(cleanValue(body.telefono1 || body.telefono_1 || body['Teléfono 1'] || body['Telefono 1'] || body.phone1 || body.telefono || body['Teléfono']));
+    const fechaIngresaFormulario = isoDateToday();
+
     const custom_fields = {};
     custom_fields[DF_RUT_NORM] = rutNoDashLower;
     custom_fields[DF_PREV_LIST] = dChoice.name;
@@ -1067,17 +1077,6 @@ if (DF_SUCURSAL && sucursal) custom_fields[DF_SUCURSAL] = sucursal;
     if (DF_COMUNA && comuna) custom_fields[DF_COMUNA] = comuna;
 
     const dealName = cleanValue(body.deal_name) || `BOX - ${[nombres, apellidos].filter(Boolean).join(' ')}`.trim() || `BOX - ${rutHuman}`;
-
-    
-const pesoNum = parseNumDot(pesoRaw);
-const estaturaNum = parseNumDot(estaturaRaw);
-const imcCalc = calcImc(pesoNum, estaturaNum);
-const imcStr = (imcCalc === null) ? null : imcCalc.toFixed(2);
-const imcClasif = (imcCalc === null) ? null : classifyImc(imcCalc);
-const edadCalc = calcEdadFromDDMMYYYY(cleanValue(body.fecha_nacimiento || body.fechaNacimiento || body['Fecha Nacimiento'] || body['Fecha Nacimiento']));
-const edadStr = (edadCalc === null) ? null : String(edadCalc);
-const whatsappLink = waLinkFromPhone(cleanValue(body.telefono1 || body.telefono_1 || body['Teléfono 1'] || body['Telefono 1'] || body.phone1 || body.telefono || body['Teléfono']));
-const fechaIngresaFormulario = isoDateToday();
 
 const vista_previa = {
       deal_name: dealName,
