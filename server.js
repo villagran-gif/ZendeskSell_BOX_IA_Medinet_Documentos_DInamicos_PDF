@@ -1371,6 +1371,117 @@ return res.status(200).json({
   }
 });
 
+// --- V1 (compat Widget Sell) ---
+app.get('/v1/config', requireApiKey, async (_req, res) => {
+  try {
+    // Usa la misma fuente que /api/docs/templates
+    const data = await getTemplatesFromDriveFolder(false, null);
+
+    const items = (data && data.items) ? data.items : [];
+    // El widget acepta templates como array de objetos {key,name}
+    const templates = items.map(it => ({
+      key: it.id, // usamos el FILE ID como key
+      name: it.name || it.id,
+    }));
+
+    return res.status(200).json({
+      ok: true,
+      status: 200,
+      templates,
+      packages: [], // el widget lo soporta vacío
+    });
+  } catch (err) {
+    console.error('v1/config error', err);
+    return res.status(500).json({ ok: false, status: 500, error: 'CONFIG_ERROR', message: err.message || String(err) });
+  }
+});
+
+app.post('/v1/drive/folder/ensure', requireApiKey, async (req, res) => {
+  try {
+    const dealId = Number(req.body?.deal_id || req.body?.dealId || '');
+    if (!Number.isFinite(dealId) || dealId <= 0) {
+      return res.status(400).json({ ok: false, status: 400, error: 'INVALID_DEAL_ID' });
+    }
+
+    // Nombre simple y estable (no depende de rut/contact)
+    const folderName = `Deal_${dealId}`;
+
+    // Crea carpeta principal + 00_PDF + 01_Docs_Generados (según lib/drive_docs)
+    const out = await ensurePatientFolders({ folderName });
+
+    return res.status(200).json({
+      ok: true,
+      status: 200,
+      folder_id: out.folder_id,
+      web_view_url: out.folder_url, // el widget lee web_view_url
+      folder: out, // extra (útil para debug)
+    });
+  } catch (err) {
+    console.error('v1/drive/folder/ensure error', err);
+    return res.status(500).json({ ok: false, status: 500, error: err.code || 'ERROR', message: err.message || String(err) });
+  }
+});
+
+app.post('/v1/render', requireApiKey, async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const templateFileId = String(payload.template_key || '').trim(); // aquí viene el ID (lo dimos en /v1/config)
+    if (!templateFileId) {
+      return res.status(400).json({ ok: false, status: 400, error: 'MISSING_TEMPLATE_KEY' });
+    }
+
+    const folderId = String(payload.deal?.folder_id || payload.folder_id || '').trim();
+    if (!folderId) {
+      return res.status(400).json({ ok: false, status: 400, error: 'MISSING_FOLDER_ID', message: 'Falta deal.folder_id' });
+    }
+
+    const fecha = String(payload.fecha || '').trim() || new Date().toISOString().slice(0, 10);
+    const obj = payload.object || {};
+
+    // Placeholders estilo {{fecha}} y {{object.run}}, etc.
+    const placeholders = { fecha };
+    for (const [k, v] of Object.entries(obj)) {
+      placeholders[`object.${k}`] = (v === null || v === undefined) ? '' : String(v);
+    }
+
+    const safeDocName = String(payload.template_key || 'doc').slice(0, 60);
+    const docName = `${safeDocName} - ${fecha}`;
+    const pdfName = `${safeDocName}_${fecha}.pdf`;
+
+    const doc = await copyTemplateToFolder({
+      templateFileId,
+      newName: docName,
+      parentFolderId: folderId,
+    });
+
+    await replacePlaceholdersInDoc({
+      documentId: doc.id,
+      placeholders,
+    });
+
+    const pdfBuffer = await exportDocAsPdfBuffer({ fileId: doc.id });
+
+    const pdf = await uploadPdfToFolder({
+      pdfBuffer,
+      pdfName,
+      parentFolderId: folderId,
+    });
+
+    return res.status(200).json({
+      ok: true,
+      status: 200,
+      doc_file_id: doc.id,
+      doc_url: docsEditUrl(doc.id),
+      pdf_file_id: pdf.id,
+      pdf_name: pdf.name || pdfName,
+      pdf_web_view_url: driveFileUrl(pdf.id),
+    });
+  } catch (err) {
+    console.error('v1/render error', err);
+    return res.status(500).json({ ok: false, status: 500, error: err.code || 'ERROR', message: err.message || String(err) });
+  }
+});
+
 app.post('/api/docs/generate-batch', async (req, res) => {
   const dryRun = String(req.query.dry_run || req.body?.dry_run || '').toLowerCase() === '1' || String(req.query.dry_run || req.body?.dry_run || '').toLowerCase() === 'true';
 
@@ -1619,4 +1730,3 @@ if (!jobs.length) {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Portal listo en :${port}`));
-
