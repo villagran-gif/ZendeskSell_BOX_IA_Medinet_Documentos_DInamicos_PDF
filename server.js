@@ -1024,6 +1024,16 @@ const DF_CIR_BALON = findDealFieldNameByNorm(dcat, [normKey('CIRUJANO DE BALON')
       });
     }
 
+    const pesoNum = parseNumDot(pesoRaw);
+    const estaturaNum = parseNumDot(estaturaRaw);
+    const imcCalc = calcImc(pesoNum, estaturaNum);
+    const imcStr = (imcCalc === null) ? null : imcCalc.toFixed(2);
+    const imcClasif = (imcCalc === null) ? null : classifyImc(imcCalc);
+    const edadCalc = calcEdadFromDDMMYYYY(cleanValue(body.fecha_nacimiento || body.fechaNacimiento || body['Fecha Nacimiento'] || body['Fecha Nacimiento']));
+    const edadStr = (edadCalc === null) ? null : String(edadCalc);
+    const whatsappLink = waLinkFromPhone(cleanValue(body.telefono1 || body.telefono_1 || body['Teléfono 1'] || body['Telefono 1'] || body.phone1 || body.telefono || body['Teléfono']));
+    const fechaIngresaFormulario = isoDateToday();
+
     const custom_fields = {};
     custom_fields[DF_RUT_NORM] = rutNoDashLower;
     custom_fields[DF_PREV_LIST] = dChoice.name;
@@ -1067,17 +1077,6 @@ if (DF_SUCURSAL && sucursal) custom_fields[DF_SUCURSAL] = sucursal;
     if (DF_COMUNA && comuna) custom_fields[DF_COMUNA] = comuna;
 
     const dealName = cleanValue(body.deal_name) || `BOX - ${[nombres, apellidos].filter(Boolean).join(' ')}`.trim() || `BOX - ${rutHuman}`;
-
-    
-const pesoNum = parseNumDot(pesoRaw);
-const estaturaNum = parseNumDot(estaturaRaw);
-const imcCalc = calcImc(pesoNum, estaturaNum);
-const imcStr = (imcCalc === null) ? null : imcCalc.toFixed(2);
-const imcClasif = (imcCalc === null) ? null : classifyImc(imcCalc);
-const edadCalc = calcEdadFromDDMMYYYY(cleanValue(body.fecha_nacimiento || body.fechaNacimiento || body['Fecha Nacimiento'] || body['Fecha Nacimiento']));
-const edadStr = (edadCalc === null) ? null : String(edadCalc);
-const whatsappLink = waLinkFromPhone(cleanValue(body.telefono1 || body.telefono_1 || body['Teléfono 1'] || body['Telefono 1'] || body.phone1 || body.telefono || body['Teléfono']));
-const fechaIngresaFormulario = isoDateToday();
 
 const vista_previa = {
       deal_name: dealName,
@@ -1493,10 +1492,10 @@ app.post('/v1/drive/folder/ensure', requireApiKey, async (req, res) => {
       ok: true,
       status: 200,
       folder_id: out.folder_id,
-<<<<<<< codex/add-api-key-guard-and-endpoints-szb82l
       docs_folder_id: out.docs_folder_id,
       pdf_folder_id: out.pdf_folder_id,
-=======
+      docs_folder_id: out.docs_folder_id,
+      pdf_folder_id: out.pdf_folder_id,
 >>>>>>> main
       web_view_url: out.folder_url,
       folder: out,
@@ -1509,13 +1508,33 @@ app.post('/v1/drive/folder/ensure', requireApiKey, async (req, res) => {
 
 app.post('/v1/render', requireApiKey, async (req, res) => {
   try {
+    if (!isWriteEnabledForDocs()) {
+      return res.status(403).json({
+        ok: false,
+        status: 403,
+        error: 'WRITE_DISABLED',
+        message: 'Generación deshabilitada (ALLOW_DOCS_WRITE/ALLOW_WRITE != true).',
+      });
+    }
+
     const payload = req.body || {};
     const templateFileId = String(payload.template_key || '').trim(); // aquí viene el ID (lo dimos en /v1/config)
     if (!templateFileId) {
       return res.status(400).json({ ok: false, status: 400, error: 'MISSING_TEMPLATE_KEY' });
     }
 
-<<<<<<< codex/add-api-key-guard-and-endpoints-szb82l
+    const rootFolderId = String(payload.deal?.folder_id || payload.folder_id || '').trim();
+    const docsFolderId = String(payload.deal?.docs_folder_id || payload.docs_folder_id || rootFolderId).trim();
+    const pdfFolderId = String(payload.deal?.pdf_folder_id || payload.pdf_folder_id || rootFolderId).trim();
+    if (!docsFolderId || !pdfFolderId) {
+      return res.status(400).json({
+        ok: false,
+        status: 400,
+        error: 'MISSING_FOLDER_ID',
+        message: 'Falta deal.docs_folder_id/deal.pdf_folder_id (o deal.folder_id como fallback).',
+      });
+    }
+
     const rootFolderId = String(payload.deal?.folder_id || payload.folder_id || '').trim();
     if (!rootFolderId) {
       return res.status(400).json({ ok: false, status: 400, error: 'MISSING_FOLDER_ID', message: 'Falta deal.folder_id' });
@@ -1523,12 +1542,6 @@ app.post('/v1/render', requireApiKey, async (req, res) => {
 
     const docsFolderId = String(payload.deal?.docs_folder_id || payload.docs_folder_id || rootFolderId).trim();
     const pdfFolderId = String(payload.deal?.pdf_folder_id || payload.pdf_folder_id || rootFolderId).trim();
-
-=======
-    const folderId = String(payload.deal?.folder_id || payload.folder_id || '').trim();
-    if (!folderId) {
-      return res.status(400).json({ ok: false, status: 400, error: 'MISSING_FOLDER_ID', message: 'Falta deal.folder_id' });
-    }
 
 >>>>>>> main
     const fecha = String(payload.fecha || '').trim() || new Date().toISOString().slice(0, 10);
@@ -1545,11 +1558,10 @@ app.post('/v1/render', requireApiKey, async (req, res) => {
     placeholders['object.telefono_movil'] = telefonoMovil;
     placeholders['object.get_edad()'] = edad !== null ? String(edad) : '';
 
-<<<<<<< codex/add-api-key-guard-and-endpoints-szb82l
     const labelBase = String(payload.template_name || payload.doc_type || payload.template_label || payload.template_key || 'doc').trim();
     const safeDocName = labelBase.slice(0, 60);
-=======
-    const safeDocName = String(payload.template_key || 'doc').slice(0, 60);
+    const labelBase = String(payload.template_name || payload.doc_type || payload.template_label || payload.template_key || 'doc').trim();
+    const safeDocName = labelBase.slice(0, 60);
 >>>>>>> main
     const docName = `${safeDocName} - ${fecha}`;
     const pdfName = `${safeDocName}_${fecha}.pdf`;
@@ -1557,19 +1569,16 @@ app.post('/v1/render', requireApiKey, async (req, res) => {
     const doc = await copyTemplateToFolder({
       templateFileId,
       newName: docName,
-<<<<<<< codex/add-api-key-guard-and-endpoints-szb82l
       parentFolderId: docsFolderId,
-=======
-      parentFolderId: folderId,
+      parentFolderId: docsFolderId,
 >>>>>>> main
     });
 
     await replacePlaceholdersInDoc({
       documentId: doc.id,
       placeholders,
-<<<<<<< codex/add-api-key-guard-and-endpoints-szb82l
       preserveMissingPlaceholders: true,
-=======
+      preserveMissingPlaceholders: true,
 >>>>>>> main
     });
 
@@ -1588,20 +1597,18 @@ app.post('/v1/render', requireApiKey, async (req, res) => {
     const pdf = await uploadPdfToFolder({
       pdfBuffer,
       pdfName,
-<<<<<<< codex/add-api-key-guard-and-endpoints-szb82l
       parentFolderId: pdfFolderId,
-=======
-      parentFolderId: folderId,
+      parentFolderId: pdfFolderId,
 >>>>>>> main
     });
 
     return res.status(200).json({
       ok: true,
       status: 200,
-<<<<<<< codex/add-api-key-guard-and-endpoints-szb82l
       docs_folder_id: docsFolderId,
       pdf_folder_id: pdfFolderId,
-=======
+      docs_folder_id: docsFolderId,
+      pdf_folder_id: pdfFolderId,
 >>>>>>> main
       doc_file_id: doc.id,
       doc_url: docsEditUrl(doc.id),
