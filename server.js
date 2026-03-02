@@ -36,6 +36,7 @@ const {
   ensurePatientFolders,
   copyTemplateToFolder,
   replacePlaceholdersInDoc,
+  ensureDealAgentHeader,
   exportDocAsPdfBuffer,
   uploadPdfToFolder,
   driveFolderUrl,
@@ -251,6 +252,70 @@ function calcAgeFromDobDDMMYYYY(s) {
   const m = now.getUTCMonth() - dob.getUTCMonth();
   if (m < 0 || (m === 0 && now.getUTCDate() < dob.getUTCDate())) age--;
   return age;
+}
+
+
+function normalizeDriveId(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+
+  const m = raw.match(/[-\w]{20,}/);
+  return m ? m[0] : raw;
+}
+
+function pickRutHuman(contact) {
+  const cf = contact?.custom_fields || {};
+  const candidateKeys = [
+    'RUT o ID',
+    'RUT',
+    'Rut',
+    'run',
+    'RUN',
+    'RUT_normalizado',
+    'RUT normalizado',
+  ];
+
+  for (const k of candidateKeys) {
+    const val = String(cf[k] || '').trim();
+    if (!val) continue;
+
+    try {
+      const n = normalizeRut(val);
+      if (n?.normalized) return n.normalized;
+    } catch (_e) {
+      // fallback below
+    }
+
+    const compact = val.toUpperCase().replace(/[^0-9K]/g, '');
+    if (compact.length >= 2) return formatRutHumanFromNoDashLower(compact.toLowerCase());
+    return val;
+  }
+
+  return '';
+}
+
+function calcAgeFlexible(rawDob) {
+  const s = String(rawDob || '').trim();
+  if (!s) return null;
+
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const yyyy = Number(iso[1]);
+    const mm = Number(iso[2]);
+    const dd = Number(iso[3]);
+    const dob = new Date(Date.UTC(yyyy, mm - 1, dd));
+    if (!Number.isNaN(dob.getTime())) {
+      const now = new Date();
+      let age = now.getUTCFullYear() - dob.getUTCFullYear();
+      const m = now.getUTCMonth() - dob.getUTCMonth();
+      if (m < 0 || (m === 0 && now.getUTCDate() < dob.getUTCDate())) age--;
+      return Number.isFinite(age) ? age : null;
+    }
+  }
+
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return calcAgeFromDobDDMMYYYY(s);
+
+  return null;
 }
 
 
@@ -1371,6 +1436,147 @@ return res.status(200).json({
   }
 });
 
+// --- V1 (compat Widget Sell) ---
+app.get('/v1/config', requireApiKey, async (_req, res) => {
+  try {
+    // Usa la misma fuente que /api/docs/templates
+    const data = await getTemplatesFromDriveFolder(false, null);
+
+    const items = (data && data.items) ? data.items : [];
+    // El widget acepta templates como array de objetos {key,name}
+    const templates = items.map(it => ({
+      key: it.id, // usamos el FILE ID como key
+      name: it.name || it.id,
+    }));
+
+    return res.status(200).json({
+      ok: true,
+      status: 200,
+      templates,
+      packages: [], // el widget lo soporta vacío
+    });
+  } catch (err) {
+    console.error('v1/config error', err);
+    return res.status(500).json({ ok: false, status: 500, error: 'CONFIG_ERROR', message: err.message || String(err) });
+  }
+});
+
+app.post('/v1/drive/folder/ensure', requireApiKey, async (req, res) => {
+  try {
+    const { deal_id, drive_root_folder_id, drive_shared_drive_id } = req.body || {};
+    const dealId = Number(deal_id || req.body?.dealId || '');
+    if (!Number.isFinite(dealId) || dealId <= 0) {
+      return res.status(400).json({ ok: false, status: 400, error: 'MISSING_DEAL_ID' });
+    }
+    if (!String(drive_root_folder_id || '').trim()) {
+      return res.status(400).json({ ok: false, status: 400, error: 'MISSING_DRIVE_ROOT_FOLDER_ID' });
+    }
+
+    const rootFolderId = normalizeDriveId(drive_root_folder_id);
+    const sharedDriveId = normalizeDriveId(drive_shared_drive_id || '');
+
+    const deal = await getDealById(dealId);
+    const contactId = deal?.contact_id || deal?.contact?.id || deal?.primary_contact_id;
+    const contact = contactId ? await getContactById(Number(contactId)) : null;
+
+    const rutHuman = pickRutHuman(contact) || `Deal_${dealId}`;
+    const fullName = `${contact?.first_name || ''} ${contact?.last_name || ''}`.trim();
+    const folderName = fullName ? `${rutHuman} - ${fullName}` : rutHuman;
+
+    const out = await ensurePatientFolders({
+      rootFolderId,
+      sharedDriveId,
+      folderName,
+    });
+
+    return res.status(200).json({
+      ok: true,
+      status: 200,
+      folder_id: out.folder_id,
+      web_view_url: out.folder_url,
+      folder: out,
+    });
+  } catch (err) {
+    console.error('v1/drive/folder/ensure error', err);
+    return res.status(500).json({ ok: false, status: 500, error: err.code || 'ERROR', message: err.message || String(err) });
+  }
+});
+
+app.post('/v1/render', requireApiKey, async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const templateFileId = String(payload.template_key || '').trim(); // aquí viene el ID (lo dimos en /v1/config)
+    if (!templateFileId) {
+      return res.status(400).json({ ok: false, status: 400, error: 'MISSING_TEMPLATE_KEY' });
+    }
+
+    const folderId = String(payload.deal?.folder_id || payload.folder_id || '').trim();
+    if (!folderId) {
+      return res.status(400).json({ ok: false, status: 400, error: 'MISSING_FOLDER_ID', message: 'Falta deal.folder_id' });
+    }
+
+    const fecha = String(payload.fecha || '').trim() || new Date().toISOString().slice(0, 10);
+    const obj = payload.object || {};
+    const dob = String(obj.fecha_nacimiento || '').trim();
+    const telefonoMovil = String(obj.telefono_movil || obj.telefono1 || obj.telefono2 || '').trim();
+    const edad = calcAgeFlexible(dob);
+
+    // Placeholders estilo {{fecha}}, {{object.*}} y {{object.get_edad()}}
+    const placeholders = { fecha };
+    for (const [k, v] of Object.entries(obj)) {
+      placeholders[`object.${k}`] = (v === null || v === undefined) ? '' : String(v);
+    }
+    placeholders['object.telefono_movil'] = telefonoMovil;
+    placeholders['object.get_edad()'] = edad !== null ? String(edad) : '';
+
+    const safeDocName = String(payload.template_key || 'doc').slice(0, 60);
+    const docName = `${safeDocName} - ${fecha}`;
+    const pdfName = `${safeDocName}_${fecha}.pdf`;
+
+    const doc = await copyTemplateToFolder({
+      templateFileId,
+      newName: docName,
+      parentFolderId: folderId,
+    });
+
+    await replacePlaceholdersInDoc({
+      documentId: doc.id,
+      placeholders,
+    });
+
+    const dealIdForHeader = String(payload.deal_id || payload.deal?.id || '').trim();
+    const actorEmail = String(payload.actor_email || payload.actor?.email || '').trim();
+    if (dealIdForHeader) {
+      await ensureDealAgentHeader({
+        documentId: doc.id,
+        dealId: dealIdForHeader,
+        agentEmail: actorEmail,
+      });
+    }
+
+    const pdfBuffer = await exportDocAsPdfBuffer({ fileId: doc.id });
+
+    const pdf = await uploadPdfToFolder({
+      pdfBuffer,
+      pdfName,
+      parentFolderId: folderId,
+    });
+
+    return res.status(200).json({
+      ok: true,
+      status: 200,
+      doc_file_id: doc.id,
+      doc_url: docsEditUrl(doc.id),
+      pdf_file_id: pdf.id,
+      pdf_name: pdf.name || pdfName,
+      pdf_web_view_url: driveFileUrl(pdf.id),
+    });
+  } catch (err) {
+    console.error('v1/render error', err);
+    return res.status(500).json({ ok: false, status: 500, error: err.code || 'ERROR', message: err.message || String(err) });
+  }
+});
+
 app.post('/api/docs/generate-batch', async (req, res) => {
   const dryRun = String(req.query.dry_run || req.body?.dry_run || '').toLowerCase() === '1' || String(req.query.dry_run || req.body?.dry_run || '').toLowerCase() === 'true';
 
@@ -1619,4 +1825,3 @@ if (!jobs.length) {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Portal listo en :${port}`));
-
